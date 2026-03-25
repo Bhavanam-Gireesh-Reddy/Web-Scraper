@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+
+{% block title %}Scrape Studio | Dashboard{% endblock %}
+
+{% block content %}
+<section class="hero-grid">
+    <div class="hero-copy panel">
+        <p class="eyebrow">Full Workflow</p>
+        <h1>Turn any website into a named PDF, saved history, and a selected-document chatbot.</h1>
+        <p class="hero-text">
+            Paste a URL, let the app scrape and clean it, store the result in MongoDB, generate a unique PDF name automatically, and open a dedicated chat workspace that answers only from that document.
+        </p>
+
+        <div class="stat-row">
+            <div class="stat-card">
+                <span class="stat-label">Saved Documents</span>
+                <strong>{{ stats.total_documents }}</strong>
+            </div>
+            <div class="stat-card">
+                <span class="stat-label">Pages In Latest Scrape</span>
+                <strong>{{ stats.total_pages }}</strong>
+            </div>
+        </div>
+    </div>
+
+    <div class="panel scrape-panel">
+        <p class="eyebrow">New Scrape</p>
+        <h2>Create a fresh document workspace</h2>
+        <form id="scrape-form" class="stack-form">
+            <label for="url-input">Website URL</label>
+            <input id="url-input" name="url" type="url" placeholder="https://example.com/docs" required>
+            <button id="scrape-submit" type="submit" class="primary-btn">Scrape, Save, and Open Chat</button>
+        </form>
+
+        <div class="note-card">
+            <strong>What happens next</strong>
+            <p>The app will scrape the site, generate a unique PDF name automatically, save the PDF metadata in MongoDB, and then open the exact document workspace used by the chatbot.</p>
+        </div>
+
+        <div id="scrape-status" class="status-box" aria-live="polite"></div>
+    </div>
+</section>
+
+<section class="section-header">
+    <div>
+        <p class="eyebrow">Recent Work</p>
+        <h2>Latest scraped documents</h2>
+    </div>
+    <a href="/history" class="ghost-link">Open full history</a>
+</section>
+
+{% if recent_documents %}
+<section class="card-grid">
+    {% for doc in recent_documents %}
+    <article class="doc-card panel">
+        <span class="pill">{{ doc.domain or 'Website' }}</span>
+        <h3>{{ doc.auto_name }}</h3>
+        <p class="meta-line">{{ doc.created_at_display }} · {{ doc.page_count }} pages</p>
+        <p class="doc-excerpt">{{ doc.content_preview }}</p>
+        <div class="card-actions">
+            <a class="primary-btn" href="/documents/{{ doc.id }}">Open Workspace</a>
+            <a class="secondary-btn" href="{{ doc.pdf_path }}" target="_blank">View PDF</a>
+        </div>
+    </article>
+    {% endfor %}
+</section>
+{% else %}
+<section class="empty-state panel">
+    <h3>No scraped documents yet</h3>
+    <p>Your saved documents will show up here after the first scrape.</p>
+</section>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+
+{% block title %}Scrape Studio | {{ document.auto_name }}{% endblock %}
+
+{% block content %}
+<section class="workspace-header panel">
+    <div>
+        <p class="eyebrow">Document Workspace</p>
+        <h1>{{ document.auto_name }}</h1>
+        <p class="hero-text">
+            This workspace is locked to a single selected PDF. The chatbot should answer only from this document and reject unrelated questions.
+        </p>
+    </div>
+
+    <div class="workspace-actions">
+        <a class="primary-btn" href="{{ document.pdf_path }}" target="_blank">Open PDF</a>
+        <a class="secondary-btn" href="{{ document.url }}" target="_blank">Open Source URL</a>
+    </div>
+    <div class="meta-cluster">
+        <span class="pill">PDF: {{ document.pdf_filename }}</span>
+        <span class="pill">Saved: {{ document.created_at_display }}</span>
+        <span class="pill">{{ document.page_count }} pages scraped</span>
+    </div>
+</section>
+
+<section class="workspace-grid" id="document-workspace" data-document-id="{{ document.id }}" data-document-name="{{ document.auto_name }}" data-pdf-path="{{ document.pdf_path }}">
+    <div class="panel chat-panel">
+        <div class="chat-intro">
+            <p class="eyebrow">Selected Chat PDF</p>
+            <h2>{{ document.auto_name }}</h2>
+            <p class="chat-note">
+                The chatbot is currently using <strong>{{ document.auto_name }}</strong>. Ask only about this PDF.
+            </p>
+            <div class="selected-file-box">
+                <span>Currently loaded PDF</span>
+                <strong>{{ document.pdf_filename }}</strong>
+                <a href="{{ document.pdf_path }}" target="_blank">Preview selected PDF</a>
+            </div>
+        </div>
+
+        <div id="chat-box" class="chat-box">
+            <div class="assistant-message">
+                <strong>Selected PDF:</strong> {{ document.auto_name }}<br>
+                I will only answer questions that can be supported by this document.
+            </div>
+        </div>
+
+        <form id="chat-form" class="chat-form">
+            <label for="chat-input">Ask about this selected PDF</label>
+            <textarea id="chat-input" rows="4" placeholder="What does this document say about...?" required></textarea>
+            <button id="chat-submit" type="submit" class="primary-btn">Ask Chatbot</button>
+        </form>
+    </div>
+
+    <div class="panel preview-panel">
+        <p class="eyebrow">PDF Preview</p>
+        <iframe src="{{ document.pdf_path }}" title="PDF preview"></iframe>
+
+        <div class="preview-copy">
+            <h2>Scraped content preview</h2>
+            <p class="doc-excerpt">{{ document.content_preview }}</p>
+        </div>
+
+        {% if document.pages %}
+        <div class="source-list">
+            <h3>Source snapshots</h3>
+            {% for page in document.pages %}
+            <article class="source-item">
+                <a href="{{ page.url }}" target="_blank">{{ page.url }}</a>
+                <p>{{ page.preview }}</p>
+            </article>
+            {% endfor %}
+        </div>
+        {% endif %}
+    </div>
+</section>
+{% endblock %}

@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+
+{% block title %}Scrape Studio | History{% endblock %}
+
+{% block content %}
+<section class="section-header">
+    <div>
+        <p class="eyebrow">History</p>
+        <h1>Every document you have scraped</h1>
+    </div>
+    <div class="history-tools">
+        <input id="history-search" type="search" placeholder="Search by name, domain, or content preview">
+    </div>
+</section>
+
+{% if documents %}
+<section class="history-grid" id="history-grid">
+    {% for doc in documents %}
+    <article class="doc-card panel history-card" data-search="{{ (doc.auto_name ~ ' ' ~ doc.domain ~ ' ' ~ doc.content_preview)|lower }}">
+        <span class="pill">{{ doc.domain or 'Website' }}</span>
+        <h2>{{ doc.auto_name }}</h2>
+        <p class="meta-line">{{ doc.created_at_display }} · {{ doc.page_count }} pages</p>
+        <p class="doc-excerpt">{{ doc.content_preview }}</p>
+        <div class="card-actions">
+            <a class="primary-btn" href="/documents/{{ doc.id }}">Open Chat Workspace</a>
+            <a class="secondary-btn" href="{{ doc.pdf_path }}" target="_blank">View PDF</a>
+        </div>
+    </article>
+    {% endfor %}
+</section>
+{% else %}
+<section class="empty-state panel">
+    <h3>No history yet</h3>
+    <p>Once you scrape a website, it will be saved here with its generated PDF name.</p>
+</section>
+{% endif %}
+{% endblock %}
