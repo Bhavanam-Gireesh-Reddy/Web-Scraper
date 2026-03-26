@@ -35,8 +35,9 @@ Add these in Vercel Project Settings -> Environment Variables:
 1. Push this project to GitHub.
 2. Import the repo into Vercel.
 3. Keep the project root as this folder.
-4. Let Vercel install from `requirements.txt`.
-5. Deploy.
+4. Let Vercel auto-detect the FastAPI app from `app.py`.
+5. Let Vercel install from `requirements.txt`.
+6. Deploy.
 
 ## 5. Notes
 

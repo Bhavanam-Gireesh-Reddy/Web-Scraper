@@ -291,8 +291,7 @@ Use:
 
 The project includes [vercel.json](C:/Users/hp/Downloads/Scraping/vercel.json) to:
 
-- increase allowed function duration
-- exclude unnecessary local files from the Python bundle
+- keep Vercel configuration simple for FastAPI auto-detection at the project root
 
 ## Notes About Vercel Deployment
 
