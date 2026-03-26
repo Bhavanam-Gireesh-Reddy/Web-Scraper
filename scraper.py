@@ -14,10 +14,15 @@ import re
 import urllib.parse
 from collections import deque
 from io import BytesIO
-import os
 
 import requests
 from bs4 import BeautifulSoup
+from crawl4ai import AsyncWebCrawler, CacheMode, CrawlerRunConfig
+
+try:
+    from crawl4ai.deep_crawling import BFSDeepGraphCrawler
+except ImportError:
+    from crawl4ai.deep_crawling import BFSDeepCrawlStrategy as BFSDeepGraphCrawler
 
 DEFAULT_MAX_PAGES = 20
 DEFAULT_MAX_DEPTH = 2
@@ -264,19 +269,7 @@ async def scrape_website(url: str, max_pages: int = DEFAULT_MAX_PAGES, max_depth
     print(f"\nScraping: {url}")
     print(f"  Crawling up to {max_pages} pages at depth {max_depth}.\n")
 
-    # Vercel-friendly path: avoid heavyweight browser crawling in serverless deploys.
-    if os.getenv("VERCEL"):
-        print("Vercel environment detected. Using lightweight static HTML scraper.")
-        return await asyncio.to_thread(scrape_website_fallback, url, max_pages, max_depth)
-
     try:
-        from crawl4ai import AsyncWebCrawler, CacheMode, CrawlerRunConfig
-
-        try:
-            from crawl4ai.deep_crawling import BFSDeepGraphCrawler
-        except ImportError:
-            from crawl4ai.deep_crawling import BFSDeepCrawlStrategy as BFSDeepGraphCrawler
-
         config = CrawlerRunConfig(
             cache_mode=CacheMode.BYPASS,
             deep_crawl_strategy=BFSDeepGraphCrawler(max_depth=max_depth, max_pages=max_pages),
@@ -522,37 +515,15 @@ def save_as_pdf(pages: list[dict[str, str]], output_path: str = "clean_content.p
 
 
 def pdf_bytes_from_pages(pages: list[dict[str, str]]) -> bytes:
-    from fpdf import FPDF
+    from xhtml2pdf import pisa
 
-    pdf = FPDF()
-    pdf.set_auto_page_break(auto=True, margin=15)
-    pdf.set_title("Scrape Studio Export")
-    pdf.set_author("Scrape Studio")
-
-    for page in pages:
-        pdf.add_page()
-        pdf.set_font("Helvetica", "B", 14)
-        pdf.multi_cell(0, 8, sanitize_pdf_text(page["url"]))
-        pdf.ln(2)
-
-        pdf.set_font("Helvetica", "", 10)
-        for raw_line in page["content"].splitlines():
-            line = sanitize_pdf_text(raw_line)
-            if not line:
-                pdf.ln(4)
-                continue
-            pdf.multi_cell(0, 6, line)
-
-    buffer = BytesIO()
-    pdf_bytes = pdf.output(dest="S")
-    if isinstance(pdf_bytes, bytearray):
-        pdf_bytes = bytes(pdf_bytes)
-    elif isinstance(pdf_bytes, str):
-        pdf_bytes = pdf_bytes.encode("latin-1", errors="ignore")
-    buffer.write(pdf_bytes)
-    return buffer.getvalue()
-
-
-def sanitize_pdf_text(value: str) -> str:
-    # FPDF's built-in core fonts work best with latin-1 compatible text.
-    return value.encode("latin-1", errors="replace").decode("latin-1")
+    html_content = pages_to_html(pages)
+    output = BytesIO()
+    result = pisa.CreatePDF(
+        html_content.encode("utf-8"),
+        dest=output,
+        encoding="utf-8",
+    )
+    if result.err:
+        print(f"PDF generated with {result.err} warning(s).")
+    return output.getvalue()
