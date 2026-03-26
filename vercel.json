@@ -1,8 +1,9 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "functions": {
-    "app.py": {
+    "api/index.py": {
       "maxDuration": 300,
+      "includeFiles": "{templates/**,static/**}",
       "excludeFiles": "{__pycache__/**,clean_content.*,database.db,web_scraper.py,static/pdfs/**}"
     }
   }
