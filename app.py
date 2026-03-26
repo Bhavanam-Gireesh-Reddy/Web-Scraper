@@ -38,7 +38,6 @@ MONGODB_DB = os.getenv("MONGODB_DB", "scrape_chat_app")
 MONGODB_COLLECTION = os.getenv("MONGODB_COLLECTION", "documents")
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 SCRAPE_MAX_PAGES = int(os.getenv("SCRAPE_MAX_PAGES", "20"))
-PDF_STORAGE_BACKEND = os.getenv("PDF_STORAGE_BACKEND", "").strip().lower()
 
 app = FastAPI(title="Scrape Studio")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -238,43 +237,7 @@ def get_groq_client() -> Groq:
     return Groq(api_key=api_key)
 
 
-def should_use_blob_storage() -> bool:
-    if PDF_STORAGE_BACKEND == "local":
-        return False
-    if PDF_STORAGE_BACKEND in {"vercel_blob", "blob"}:
-        return True
-    return bool(os.getenv("BLOB_READ_WRITE_TOKEN"))
-
-
 async def store_pdf_asset(pdf_filename: str, pdf_bytes: bytes) -> dict[str, str]:
-    if should_use_blob_storage():
-        try:
-            from vercel.blob import AsyncBlobClient
-        except ImportError as exc:
-            raise HTTPException(
-                status_code=500,
-                detail="Vercel Blob is enabled but the `vercel` package is not installed.",
-            ) from exc
-
-        try:
-            blob_client = AsyncBlobClient()
-            blob = await blob_client.put(
-                f"pdfs/{pdf_filename}",
-                pdf_bytes,
-                access="public",
-                add_random_suffix=False,
-            )
-            return {
-                "pdf_path": blob.url,
-                "pdf_filename": pdf_filename,
-                "pdf_storage": "vercel_blob",
-            }
-        except Exception as exc:
-            raise HTTPException(
-                status_code=500,
-                detail=f"Failed to upload the generated PDF to Vercel Blob: {exc}",
-            ) from exc
-
     pdf_output_path = PDF_DIR / pdf_filename
     pdf_output_path.write_bytes(pdf_bytes)
     return {

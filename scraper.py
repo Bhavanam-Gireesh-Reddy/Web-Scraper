@@ -10,19 +10,25 @@ First-time crawl4ai setup (run once):
 
 import asyncio
 import html as html_module
+import os
 import re
+import sys
 import urllib.parse
+import warnings
 from collections import deque
 from io import BytesIO
+from xml.sax.saxutils import escape
+
+warnings.filterwarnings(
+    "ignore",
+    message=r"urllib3 .* doesn't match a supported version",
+)
 
 import requests
 from bs4 import BeautifulSoup
-from crawl4ai import AsyncWebCrawler, CacheMode, CrawlerRunConfig
 
-try:
-    from crawl4ai.deep_crawling import BFSDeepGraphCrawler
-except ImportError:
-    from crawl4ai.deep_crawling import BFSDeepCrawlStrategy as BFSDeepGraphCrawler
+warnings.simplefilter("ignore", requests.exceptions.RequestsDependencyWarning)
+requests.packages.urllib3.disable_warnings()
 
 DEFAULT_MAX_PAGES = 20
 DEFAULT_MAX_DEPTH = 2
@@ -213,8 +219,14 @@ def should_follow_link(candidate_url: str, root_netloc: str) -> bool:
     return True
 
 
-def scrape_website_fallback(url: str, max_pages: int = DEFAULT_MAX_PAGES, max_depth: int = DEFAULT_MAX_DEPTH) -> list[dict[str, str]]:
-    print("Primary browser crawler failed. Switching to static HTML fallback.")
+def scrape_website_fallback(
+    url: str,
+    max_pages: int = DEFAULT_MAX_PAGES,
+    max_depth: int = DEFAULT_MAX_DEPTH,
+    announce_reason: str = "Primary browser crawler failed. Switching to static HTML fallback.",
+) -> list[dict[str, str]]:
+    if announce_reason:
+        print(announce_reason)
 
     session = requests.Session()
     session.headers.update(REQUEST_HEADERS)
@@ -223,6 +235,7 @@ def scrape_website_fallback(url: str, max_pages: int = DEFAULT_MAX_PAGES, max_de
     root_netloc = root.netloc
     queue: deque[tuple[str, int]] = deque([(url, 0)])
     visited: set[str] = set()
+    saved_urls: set[str] = set()
     pages: list[dict[str, str]] = []
 
     while queue and len(pages) < max_pages:
@@ -235,6 +248,13 @@ def scrape_website_fallback(url: str, max_pages: int = DEFAULT_MAX_PAGES, max_de
         try:
             response = session.get(current_url, timeout=20)
             response.raise_for_status()
+        except requests.exceptions.SSLError:
+            try:
+                response = session.get(current_url, timeout=20, verify=False)
+                response.raise_for_status()
+            except Exception as exc:
+                print(f"  Skipped {current_url[:100]} because of request error: {exc}")
+                continue
         except Exception as exc:
             print(f"  Skipped {current_url[:100]} because of request error: {exc}")
             continue
@@ -243,8 +263,13 @@ def scrape_website_fallback(url: str, max_pages: int = DEFAULT_MAX_PAGES, max_de
         if "text/html" not in content_type:
             continue
 
+        response_normalized = response.url.rstrip("/")
+        if response_normalized in saved_urls:
+            continue
+
         cleaned = html_to_markdown_like_text(response.text, current_url)
         if cleaned.strip():
+            saved_urls.add(response_normalized)
             pages.append({"url": response.url, "content": cleaned})
             print(f"  Saved page: {response.url[:100]}")
 
@@ -269,7 +294,27 @@ async def scrape_website(url: str, max_pages: int = DEFAULT_MAX_PAGES, max_depth
     print(f"\nScraping: {url}")
     print(f"  Crawling up to {max_pages} pages at depth {max_depth}.\n")
 
+    scraper_mode = os.getenv("SCRAPER_MODE", "").strip().lower()
+
+    # Local-first stable mode: avoid the Windows Playwright loop issue unless
+    # browser crawling is explicitly requested.
+    if scraper_mode == "static" or (sys.platform == "win32" and scraper_mode != "browser"):
+        return await asyncio.to_thread(
+            scrape_website_fallback,
+            url,
+            max_pages,
+            max_depth,
+            "Using stable static HTML scraper.",
+        )
+
     try:
+        from crawl4ai import AsyncWebCrawler, CacheMode, CrawlerRunConfig
+
+        try:
+            from crawl4ai.deep_crawling import BFSDeepGraphCrawler
+        except ImportError:
+            from crawl4ai.deep_crawling import BFSDeepCrawlStrategy as BFSDeepGraphCrawler
+
         config = CrawlerRunConfig(
             cache_mode=CacheMode.BYPASS,
             deep_crawl_strategy=BFSDeepGraphCrawler(max_depth=max_depth, max_pages=max_pages),
@@ -302,12 +347,24 @@ async def scrape_website(url: str, max_pages: int = DEFAULT_MAX_PAGES, max_depth
         return pages
     except NotImplementedError as exc:
         print(f"Browser crawler is unavailable on this Windows event loop: {exc}")
-        return await asyncio.to_thread(scrape_website_fallback, url, max_pages, max_depth)
+        return await asyncio.to_thread(
+            scrape_website_fallback,
+            url,
+            max_pages,
+            max_depth,
+            "Browser crawler is unavailable. Switching to static HTML fallback.",
+        )
     except Exception as exc:
         message = str(exc).lower()
         if "playwright" in message or "subprocess" in message or "browser" in message:
             print(f"Browser crawler failed with a Playwright/browser error: {exc}")
-            return await asyncio.to_thread(scrape_website_fallback, url, max_pages, max_depth)
+            return await asyncio.to_thread(
+                scrape_website_fallback,
+                url,
+                max_pages,
+                max_depth,
+                "Browser crawler failed. Switching to static HTML fallback.",
+            )
         raise
 
 
@@ -515,15 +572,57 @@ def save_as_pdf(pages: list[dict[str, str]], output_path: str = "clean_content.p
 
 
 def pdf_bytes_from_pages(pages: list[dict[str, str]]) -> bytes:
-    from xhtml2pdf import pisa
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.lib.units import mm
+    from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer
 
-    html_content = pages_to_html(pages)
-    output = BytesIO()
-    result = pisa.CreatePDF(
-        html_content.encode("utf-8"),
-        dest=output,
-        encoding="utf-8",
+    buffer = BytesIO()
+    document = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        leftMargin=18 * mm,
+        rightMargin=18 * mm,
+        topMargin=18 * mm,
+        bottomMargin=18 * mm,
     )
-    if result.err:
-        print(f"PDF generated with {result.err} warning(s).")
-    return output.getvalue()
+
+    styles = getSampleStyleSheet()
+    url_style = ParagraphStyle(
+        "UrlStyle",
+        parent=styles["Heading4"],
+        fontName="Helvetica-Bold",
+        fontSize=11,
+        leading=14,
+        spaceAfter=8,
+    )
+    body_style = ParagraphStyle(
+        "BodyStyle",
+        parent=styles["BodyText"],
+        fontName="Helvetica",
+        fontSize=9.5,
+        leading=13,
+        spaceAfter=4,
+    )
+
+    story = []
+    for index, page in enumerate(pages):
+        story.append(Paragraph(escape(sanitize_pdf_text(page["url"])), url_style))
+        story.append(Spacer(1, 4))
+
+        for raw_line in page["content"].splitlines():
+            line = sanitize_pdf_text(raw_line).strip()
+            if not line:
+                story.append(Spacer(1, 6))
+                continue
+            story.append(Paragraph(escape(line), body_style))
+
+        if index != len(pages) - 1:
+            story.append(PageBreak())
+
+    document.build(story)
+    return buffer.getvalue()
+
+
+def sanitize_pdf_text(value: str) -> str:
+    return value.encode("latin-1", errors="replace").decode("latin-1")

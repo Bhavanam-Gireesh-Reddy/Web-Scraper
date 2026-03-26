@@ -6,8 +6,6 @@ groq
 motor
 pymongo
 dnspython
-crawl4ai
-xhtml2pdf
 requests
 beautifulsoup4
-vercel
+reportlab
