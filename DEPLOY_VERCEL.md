@@ -43,4 +43,5 @@ Add these in Vercel Project Settings -> Environment Variables:
 
 - The app uses MongoDB Atlas by connection string, so no code change is needed when switching from local MongoDB to Atlas.
 - The app stores PDF URLs in MongoDB. On Vercel, these should be Blob URLs, not local file paths.
-- Browser-based crawling may still depend on target site behavior and Vercel function runtime constraints. If the browser path fails, this app falls back to a static HTML scraper automatically.
+- Vercel uses the lightweight static HTML scraper path to avoid oversized serverless dependencies.
+- If you want browser-style crawling locally, you can install `crawl4ai` in your local environment without adding it to Vercel deployment dependencies.

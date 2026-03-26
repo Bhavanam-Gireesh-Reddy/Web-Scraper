@@ -16,7 +16,8 @@ This project is built to run both:
 ## Features
 
 - Modern multi-page frontend with dashboard, history, and document workspace
-- Website scraping with `crawl4ai`
+- Website scraping with a lightweight static HTML crawler
+- Optional browser-style crawling locally if `crawl4ai` is installed
 - Automatic fallback scraper using `requests + BeautifulSoup` if the browser crawler fails
 - Auto-generated PDF names based on domain + detected title + timestamp
 - PDF generation from scraped content
@@ -45,8 +46,9 @@ This project is built to run both:
 - Frontend: Jinja2 templates, vanilla JavaScript, CSS
 - Database: MongoDB / MongoDB Atlas
 - AI: Groq API
-- Scraping: `crawl4ai`, `requests`, `beautifulsoup4`
-- PDF generation: `xhtml2pdf`
+- Scraping: `requests`, `beautifulsoup4`
+- Optional local browser scraping: `crawl4ai`
+- PDF generation: `fpdf2`
 - Cloud file storage on Vercel: Vercel Blob
 
 ## Project Structure
@@ -297,8 +299,8 @@ The project includes [vercel.json](C:/Users/hp/Downloads/Scraping/vercel.json) t
 
 - MongoDB Atlas is the correct choice for production deployment
 - Vercel Blob is the correct choice for generated PDFs in production
-- browser-based scraping can still depend on the target website and runtime conditions
-- if `crawl4ai` / Playwright fails, the app automatically falls back to a static HTML scraper
+- Vercel uses the lightweight static HTML scraper path to keep deployment size manageable
+- if optional local `crawl4ai` / Playwright scraping fails, the app automatically falls back to a static HTML scraper
 - very large sites may still take time and may hit serverless execution limits
 
 ## Current Default AI Model
