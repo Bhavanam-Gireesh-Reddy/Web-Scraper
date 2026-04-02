@@ -30,14 +30,28 @@ STATIC_DIR = BASE_DIR / "static"
 PDF_DIR = STATIC_DIR / "pdfs"
 TEMPLATES_DIR = BASE_DIR / "templates"
 
-STATIC_DIR.mkdir(exist_ok=True)
-PDF_DIR.mkdir(exist_ok=True)
+# Harden directory creation for read-only filesystems (Vercel)
+try:
+    if os.getenv("PDF_STORAGE_BACKEND", "local") == "local":
+        STATIC_DIR.mkdir(exist_ok=True, parents=True)
+        PDF_DIR.mkdir(exist_ok=True, parents=True)
+except OSError:
+    # Silent fail for Vercel's read-only filesystem
+    pass
 
-MONGODB_URI = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
+MONGODB_URI = os.getenv("MONGODB_URI", "")
 MONGODB_DB = os.getenv("MONGODB_DB", "scrape_chat_app")
 MONGODB_COLLECTION = os.getenv("MONGODB_COLLECTION", "documents")
+
+if not MONGODB_URI:
+    print("WARNING: MONGODB_URI environment variable is missing.")
+
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
-SCRAPE_MAX_PAGES = int(os.getenv("SCRAPE_MAX_PAGES", "20"))
+
+try:
+    SCRAPE_MAX_PAGES = int(os.getenv("SCRAPE_MAX_PAGES", "20"))
+except (ValueError, TypeError):
+    SCRAPE_MAX_PAGES = 20
 
 app = FastAPI(title="Scrape Studio")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -233,19 +247,28 @@ def get_groq_client() -> Groq:
     if not api_key:
         raise HTTPException(
             status_code=503,
-            detail="Groq API key not found. Add GROQ_API_KEY to your .env file.",
+            detail="Groq API key not found. Add GROQ_API_KEY to your environment variables.",
         )
     return Groq(api_key=api_key)
 
 
 async def store_pdf_asset(pdf_filename: str, pdf_bytes: bytes) -> dict[str, str]:
     pdf_output_path = PDF_DIR / pdf_filename
-    pdf_output_path.write_bytes(pdf_bytes)
-    return {
-        "pdf_path": f"/static/pdfs/{pdf_filename}",
-        "pdf_filename": pdf_filename,
-        "pdf_storage": "local",
-    }
+    
+    try:
+        pdf_output_path.write_bytes(pdf_bytes)
+        return {
+            "pdf_path": f"/static/pdfs/{pdf_filename}",
+            "pdf_filename": pdf_filename,
+            "pdf_storage": "local",
+        }
+    except Exception:
+        # Fallback for when local writes fail or are disabled
+        return {
+            "pdf_path": "",
+            "pdf_filename": pdf_filename,
+            "pdf_storage": "failed",
+        }
 
 
 @app.on_event("startup")
@@ -261,6 +284,10 @@ async def shutdown_event() -> None:
 
 
 async def initialize_mongo_state() -> None:
+    if not MONGODB_URI:
+        app.state.mongo_startup_error = "MONGODB_URI is not set."
+        return
+
     if getattr(app.state, "mongo_client", None) is None:
         app.state.mongo_client = AsyncIOMotorClient(MONGODB_URI, serverSelectionTimeoutMS=3000)
         app.state.database = app.state.mongo_client[MONGODB_DB]
@@ -275,6 +302,9 @@ async def initialize_mongo_state() -> None:
 
 
 async def get_collection() -> Any:
+    if not MONGODB_URI:
+         raise HTTPException(status_code=500, detail="Database configuration is missing. Set MONGODB_URI.")
+
     try:
         if getattr(app.state, "mongo_client", None) is None:
             await initialize_mongo_state()
@@ -283,7 +313,7 @@ async def get_collection() -> Any:
     except Exception as exc:
         raise HTTPException(
             status_code=503,
-            detail=f"MongoDB is not reachable. Check MONGODB_URI. Details: {exc}",
+            detail=f"MongoDB is not reachable. Details: {exc}",
         ) from exc
 
 
@@ -314,6 +344,8 @@ async def home(request: Request) -> HTMLResponse:
         stats = await load_document_counts()
     except HTTPException as exc:
         database_error = exc.detail
+    except Exception as exc:
+        database_error = str(exc)
 
     return templates.TemplateResponse(
         "index.html",
@@ -337,6 +369,8 @@ async def history_page(request: Request) -> HTMLResponse:
         documents = [serialize_document(row) for row in rows]
     except HTTPException as exc:
         database_error = exc.detail
+    except Exception as exc:
+        database_error = str(exc)
 
     return templates.TemplateResponse(
         "history.html",
