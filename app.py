@@ -340,17 +340,20 @@ async def home(request: Request) -> HTMLResponse:
     stats = {"total_documents": 0, "total_pages": 0}
 
     try:
-        recent_documents = await load_recent_documents(limit=6)
-        stats = await load_document_counts()
+        if not MONGODB_URI:
+            database_error = "Project Configuration Missing: MONGODB_URI is not set in Vercel settings."
+        else:
+            recent_documents = await load_recent_documents(limit=6)
+            stats = await load_document_counts()
     except HTTPException as exc:
         database_error = exc.detail
     except Exception as exc:
         database_error = str(exc)
 
     return templates.TemplateResponse(
-        "index.html",
-        {
-            "request": request,
+        request=request,
+        name="index.html",
+        context={
             "recent_documents": recent_documents,
             "stats": stats,
             "database_error": database_error,
@@ -364,18 +367,21 @@ async def history_page(request: Request) -> HTMLResponse:
     documents: list[dict[str, Any]] = []
 
     try:
-        collection = await get_collection()
-        rows = await collection.find().sort("created_at", -1).to_list(length=200)
-        documents = [serialize_document(row) for row in rows]
+        if not MONGODB_URI:
+            database_error = "Project Configuration Missing: MONGODB_URI is not set in Vercel settings."
+        else:
+            collection = await get_collection()
+            rows = await collection.find().sort("created_at", -1).to_list(length=200)
+            documents = [serialize_document(row) for row in rows]
     except HTTPException as exc:
         database_error = exc.detail
     except Exception as exc:
         database_error = str(exc)
 
     return templates.TemplateResponse(
-        "history.html",
-        {
-            "request": request,
+        request=request,
+        name="history.html",
+        context={
             "documents": documents,
             "database_error": database_error,
         },
@@ -391,9 +397,9 @@ async def document_page(request: Request, document_id: str) -> HTMLResponse:
 
     document = serialize_document(row, include_content=True)
     return templates.TemplateResponse(
-        "document.html",
-        {
-            "request": request,
+        request=request,
+        name="document.html",
+        context={
             "document": document,
             "database_error": "",
         },
