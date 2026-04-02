@@ -4,9 +4,10 @@ import os
 import re
 import secrets
 import sys
+import traceback
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import quote_plus, urlparse
 
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
@@ -14,7 +15,7 @@ if sys.platform == "win32":
 from bson import ObjectId
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from groq import Groq
@@ -32,7 +33,7 @@ TEMPLATES_DIR = BASE_DIR / "templates"
 
 # Harden directory creation for read-only filesystems (Vercel)
 try:
-    if os.getenv("PDF_STORAGE_BACKEND", "local") == "local":
+    if os.getenv("PDF_STORAGE_BACKEND", "local") == "local" or not os.getenv("VERCEL"):
         STATIC_DIR.mkdir(exist_ok=True, parents=True)
         PDF_DIR.mkdir(exist_ok=True, parents=True)
 except OSError:
@@ -69,42 +70,7 @@ class ChatRequest(BaseModel):
 
 
 STOP_WORDS = {
-    "a",
-    "an",
-    "and",
-    "are",
-    "as",
-    "at",
-    "be",
-    "but",
-    "by",
-    "for",
-    "from",
-    "how",
-    "i",
-    "if",
-    "in",
-    "is",
-    "it",
-    "of",
-    "on",
-    "or",
-    "please",
-    "tell",
-    "that",
-    "the",
-    "this",
-    "to",
-    "was",
-    "what",
-    "when",
-    "where",
-    "which",
-    "who",
-    "why",
-    "with",
-    "you",
-    "your",
+    "a", "an", "and", "are", "as", "at", "be", "but", "by", "for", "from", "how", "i", "if", "in", "is", "it", "of", "on", "or", "please", "tell", "that", "the", "this", "to", "was", "what", "when", "where", "which", "who", "why", "with", "you", "your",
 }
 
 
@@ -256,14 +222,23 @@ async def store_pdf_asset(pdf_filename: str, pdf_bytes: bytes) -> dict[str, str]
     pdf_output_path = PDF_DIR / pdf_filename
     
     try:
-        pdf_output_path.write_bytes(pdf_bytes)
-        return {
-            "pdf_path": f"/static/pdfs/{pdf_filename}",
-            "pdf_filename": pdf_filename,
-            "pdf_storage": "local",
-        }
-    except Exception:
-        # Fallback for when local writes fail or are disabled
+        if not os.getenv("VERCEL"):
+            pdf_output_path.write_bytes(pdf_bytes)
+            return {
+                "pdf_path": f"/static/pdfs/{pdf_filename}",
+                "pdf_filename": pdf_filename,
+                "pdf_storage": "local",
+            }
+        else:
+            # On Vercel, we can't save to the local static folder.
+            # Returning a dummy path for now, but in reality, users should use Vercel Blob.
+            return {
+                "pdf_path": "#",
+                "pdf_filename": pdf_filename,
+                "pdf_storage": "disabled_on_vercel",
+            }
+    except Exception as exc:
+        print(f"DEBUG: store_pdf_asset failed: {exc}")
         return {
             "pdf_path": "",
             "pdf_filename": pdf_filename,
@@ -288,32 +263,50 @@ async def initialize_mongo_state() -> None:
         app.state.mongo_startup_error = "MONGODB_URI is not set."
         return
 
+    # Check for unencoded special characters in URI (password part)
+    # This is a common point of failure for Atlas connections
+    if "@" in MONGODB_URI.split("@", 1)[0].replace("mongodb+srv://", ""):
+        print("CRITICAL: Your MONGODB_URI appears to have an unencoded '@' in the username/password section. This will cause connection failure.")
+
     if getattr(app.state, "mongo_client", None) is None:
-        app.state.mongo_client = AsyncIOMotorClient(MONGODB_URI, serverSelectionTimeoutMS=3000)
+        print("DEBUG: Initializing MongoDB client...")
+        app.state.mongo_client = AsyncIOMotorClient(
+            MONGODB_URI, 
+            serverSelectionTimeoutMS=5000,
+            connectTimeoutMS=5000
+        )
         app.state.database = app.state.mongo_client[MONGODB_DB]
         app.state.collection = app.state.database[MONGODB_COLLECTION]
         app.state.mongo_startup_error = ""
 
     try:
+        # Fast ping to verify connection
+        await app.state.mongo_client.admin.command("ping")
+        print("DEBUG: MongoDB Atlas ping successful.")
         await app.state.collection.create_index("created_at")
         await app.state.collection.create_index("url")
     except Exception as exc:
+        print(f"DEBUG: MongoDB connection failed: {exc}")
         app.state.mongo_startup_error = str(exc)
 
 
 async def get_collection() -> Any:
     if not MONGODB_URI:
-         raise HTTPException(status_code=500, detail="Database configuration is missing. Set MONGODB_URI.")
+         raise HTTPException(status_code=500, detail="Database configuration is missing. Set MONGODB_URI in Vercel Environment Variables.")
 
     try:
         if getattr(app.state, "mongo_client", None) is None:
+            print("DEBUG: Client not found, re-initializing...")
             await initialize_mongo_state()
+        
+        # Ping check
         await app.state.mongo_client.admin.command("ping")
         return app.state.collection
     except Exception as exc:
+        print(f"DEBUG: get_collection failed: {exc}")
         raise HTTPException(
             status_code=503,
-            detail=f"MongoDB is not reachable. Details: {exc}",
+            detail=f"Database connection failed. Ensure: 1. Your MONGODB_URI is correct. 2. You have allowed IP '0.0.0.0/0' in MongoDB Atlas Network Access. 3. Your password is URL-encoded. Error: {exc}",
         ) from exc
 
 
@@ -390,20 +383,30 @@ async def history_page(request: Request) -> HTMLResponse:
 
 @app.get("/documents/{document_id}", response_class=HTMLResponse)
 async def document_page(request: Request, document_id: str) -> HTMLResponse:
-    collection = await get_collection()
-    row = await collection.find_one({"_id": parse_object_id(document_id)})
-    if not row:
-        raise HTTPException(status_code=404, detail="Document not found.")
+    try:
+        collection = await get_collection()
+        row = await collection.find_one({"_id": parse_object_id(document_id)})
+        if not row:
+            raise HTTPException(status_code=404, detail="Document not found.")
 
-    document = serialize_document(row, include_content=True)
-    return templates.TemplateResponse(
-        request=request,
-        name="document.html",
-        context={
-            "document": document,
-            "database_error": "",
-        },
-    )
+        document = serialize_document(row, include_content=True)
+        return templates.TemplateResponse(
+            request=request,
+            name="document.html",
+            context={
+                "document": document,
+                "database_error": "",
+            },
+        )
+    except Exception as exc:
+         return templates.TemplateResponse(
+            request=request,
+            name="document.html",
+            context={
+                "document": {"title": "Error", "content": str(exc)},
+                "database_error": str(exc),
+            },
+        )
 
 
 @app.get("/api/documents")
@@ -423,47 +426,88 @@ async def get_document(document_id: str) -> dict[str, Any]:
 
 
 @app.post("/api/scrape")
-async def perform_scrape(req: ScrapeRequest) -> dict[str, Any]:
-    collection = await get_collection()
-    url = req.url.strip()
-    pages = await scrape_website(url, max_pages=req.max_pages)
+async def perform_scrape(req: ScrapeRequest) -> Any:
+    print(f"DEBUG: Starting scrape process for URL: {req.url}")
+    
+    try:
+        # Step 1: Database Check
+        print("DEBUG: Checking database connection...")
+        collection = await get_collection()
+        print("DEBUG: Database active.")
 
-    if not pages:
-        raise HTTPException(status_code=400, detail="No content could be scraped from that URL.")
+        # Step 2: Perform Scrape
+        url = req.url.strip()
+        print(f"DEBUG: Triggering scrape (max_pages={req.max_pages})...")
+        pages = await scrape_website(url, max_pages=req.max_pages)
+        print(f"DEBUG: Scrape completed. Found {len(pages)} pages.")
 
-    auto_name = generate_auto_name(url, pages)
-    pdf_filename = f"{auto_name}.pdf"
-    pdf_bytes = pdf_bytes_from_pages(pages)
-    pdf_asset = await store_pdf_asset(pdf_filename, pdf_bytes)
+        if not pages:
+            return JSONResponse(status_code=400, content={"detail": "No content could be scraped from that URL. Ensure the site is accessible."})
 
-    full_text = "\n\n".join(page["content"] for page in pages)
-    now = dt.datetime.utcnow()
-    parsed = urlparse(url)
-    title = extract_best_title(pages, url)
+        # Step 3: Generate PDF
+        print("DEBUG: Generating PDF bytes...")
+        auto_name = generate_auto_name(url, pages)
+        pdf_filename = f"{auto_name}.pdf"
+        pdf_bytes = pdf_bytes_from_pages(pages)
+        print(f"DEBUG: PDF generated ({len(pdf_bytes)} bytes).")
 
-    document = {
-        "url": url,
-        "domain": parsed.netloc.replace("www.", ""),
-        "title": title,
-        "auto_name": auto_name,
-        "pdf_filename": pdf_asset["pdf_filename"],
-        "pdf_path": pdf_asset["pdf_path"],
-        "pdf_storage": pdf_asset["pdf_storage"],
-        "content": full_text,
-        "content_preview": excerpt_text(full_text, 280),
-        "pages": pages,
-        "page_count": len(pages),
-        "char_count": len(full_text),
-        "created_at": now,
-        "updated_at": now,
-    }
+        # Step 4: Store Asset
+        print("DEBUG: Storing PDF asset...")
+        pdf_asset = await store_pdf_asset(pdf_filename, pdf_bytes)
+        print(f"DEBUG: Asset stored (Mode: {pdf_asset['pdf_storage']}).")
 
-    result = await collection.insert_one(document)
-    stored = await collection.find_one({"_id": result.inserted_id})
-    return {
-        "message": "Scraped successfully.",
-        "document": serialize_document(stored),
-    }
+        # Step 5: Save to MongoDB
+        full_text = "\n\n".join(page["content"] for page in pages)
+        now = dt.datetime.utcnow()
+        parsed = urlparse(url)
+        title = extract_best_title(pages, url)
+
+        document = {
+            "url": url,
+            "domain": parsed.netloc.replace("www.", ""),
+            "title": title,
+            "auto_name": auto_name,
+            "pdf_filename": pdf_asset["pdf_filename"],
+            "pdf_path": pdf_asset["pdf_path"],
+            "pdf_storage": pdf_asset["pdf_storage"],
+            "content": full_text,
+            "content_preview": excerpt_text(full_text, 280),
+            "pages": pages,
+            "page_count": len(pages),
+            "char_count": len(full_text),
+            "created_at": now,
+            "updated_at": now,
+        }
+
+        print("DEBUG: Inserting record into MongoDB...")
+        result = await collection.insert_one(document)
+        print(f"DEBUG: Record inserted (ID: {result.inserted_id}).")
+        
+        stored = await collection.find_one({"_id": result.inserted_id})
+        return {
+            "message": "Scraped successfully.",
+            "document": serialize_document(stored),
+        }
+
+    except HTTPException as exc:
+        print(f"DEBUG: HTTPException in perform_scrape: {exc.detail}")
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+        
+    except Exception as exc:
+        error_trace = traceback.format_exc()
+        print(f"DEBUG: CRITICAL ERROR in perform_scrape:\n{error_trace}")
+        
+        # Friendly response for timeout issues
+        if "timeout" in str(exc).lower():
+            return JSONResponse(
+                status_code=504, 
+                content={"detail": "The operation timed out. Vercel allows max 10s. Try setting 'Max Pages' to 1 or 2 as a test."}
+            )
+            
+        return JSONResponse(
+            status_code=500, 
+            content={"detail": f"An unexpected error occurred during the scrape: {str(exc)}"}
+        )
 
 
 @app.post("/api/chat")
