@@ -29,6 +29,10 @@
         <form id="scrape-form" class="stack-form">
             <label for="url-input">Website URL</label>
             <input id="url-input" name="url" type="url" placeholder="https://example.com/docs" required>
+            
+            <label for="max-pages-input">Max Pages to Scrape (1-100)</label>
+            <input id="max-pages-input" name="max_pages" type="number" value="20" min="1" max="100">
+            
             <button id="scrape-submit" type="submit" class="primary-btn">Scrape, Save, and Open Chat</button>
         </form>
 

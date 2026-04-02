@@ -21,10 +21,13 @@ async function handleScrapeSubmit(event) {
     event.preventDefault();
 
     const input = document.getElementById("url-input");
+    const maxPagesInput = document.getElementById("max-pages-input");
     const button = document.getElementById("scrape-submit");
     if (!input || !button) return;
 
     const url = input.value.trim();
+    const max_pages = maxPagesInput ? parseInt(maxPagesInput.value) : 20;
+
     if (!url) {
         setStatusBox("Enter a valid URL before starting the scrape.", "error");
         return;
@@ -38,7 +41,7 @@ async function handleScrapeSubmit(event) {
         const response = await fetch("/api/scrape", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ url })
+            body: JSON.stringify({ url, max_pages })
         });
         const data = await response.json();
 

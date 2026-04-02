@@ -1,46 +1,49 @@
-# Deploying Scrape Studio to Vercel with MongoDB Atlas
+# Deploying Scrape Studio to Vercel
 
-## 1. MongoDB Atlas
+Follow these steps to deploy **Scrape Studio** using **Vercel**, **MongoDB Atlas**, and **Vercel Blob**.
 
-1. Create an Atlas cluster.
-2. Create a database user.
-3. Copy the Python connection string from Atlas.
-4. Allow Vercel access.
-   - If you use the Vercel native Atlas integration, Vercel can set `MONGODB_URI` for you.
-   - If you connect manually, Atlas must allow Vercel's dynamic IP usage. For simple public deployment, this usually means allowing `0.0.0.0/0`.
+## 1. MongoDB Atlas (Database)
 
-## 2. Vercel Blob
+1.  Log in to [MongoDB Atlas](https://www.mongodb.com/cloud/atlas).
+2.  Create a free **M0 Cluster**.
+3.  Create a **Database User** (with read/write access).
+4.  Configure **Network Access**:
+    *   For Vercel dynamic IPs, you typically need to allow access from anywhere (`0.0.0.0/0`).
+    *   *Tip*: Use the Atlas native Vercel integration for a more secure connection if preferred.
+5.  Copy your **Connection String** (for Python). It looks like this:
+    `mongodb+srv://<username>:<password>@cluster0.xxxxx.mongodb.net/?retryWrites=true&w=majority`
 
-Generated PDFs cannot rely on Vercel's local filesystem if you want them to remain available after the request finishes. This app supports Vercel Blob for PDF storage.
+## 2. Vercel Blob (PDF Storage)
 
-1. In your Vercel project, create a Blob store.
-2. Add `BLOB_READ_WRITE_TOKEN` to the project environment variables.
-3. Set `PDF_STORAGE_BACKEND=vercel_blob`.
+Since Vercel has a read-only filesystem, generated PDFs must be stored in the cloud.
+
+1.  In your **Vercel Dashboard**, go to **Storage**.
+2.  Create a new **Blob** store.
+3.  Connect it to your project.
+4.  Vercel will automatically add `BLOB_READ_WRITE_TOKEN` to your environment.
 
 ## 3. Required Environment Variables
 
-Add these in Vercel Project Settings -> Environment Variables:
+Go to **Project Settings > Environment Variables** and add:
 
-- `GROQ_API_KEY`
-- `MONGODB_URI`
-- `MONGODB_DB`
-- `MONGODB_COLLECTION`
-- `GROQ_MODEL`
-- `SCRAPE_MAX_PAGES`
-- `PDF_STORAGE_BACKEND`
-- `BLOB_READ_WRITE_TOKEN`
+| Key | Value |
+| :--- | :--- |
+| `GROQ_API_KEY` | Your key from [console.groq.com](https://console.groq.com) |
+| `MONGODB_URI` | Your Atlas Connection String (from Step 1) |
+| `MONGODB_DB` | `scrape_chat_app` |
+| `MONGODB_COLLECTION` | `documents` |
+| `PDF_STORAGE_BACKEND` | `vercel_blob` |
+| `GROQ_MODEL` | `llama-3.3-70b-versatile` |
 
-## 4. Deploy
+## 4. Deployment Steps
 
-1. Push this project to GitHub.
-2. Import the repo into Vercel.
-3. Keep the project root as this folder.
-4. Let Vercel auto-detect the FastAPI app from `app.py`.
-5. Let Vercel install from `requirements.txt`.
-6. Deploy.
+1.  **Push to GitHub**: Commit all files (including the updated `vercel.json` and `requirements.txt`).
+2.  **Import to Vercel**: Import your repository into the Vercel Dashboard.
+3.  **Zero Configuration**: The included [vercel.json](./vercel.json) will automatically tell Vercel to use the Python runtime and route all traffic to `app.py`.
+4.  **Deploy**: Click **Deploy** and wait for the "Congratulations" screen.
 
-## 5. Notes
+## 5. Important Notes
 
-- The app uses MongoDB Atlas by connection string, so no code change is needed when switching from local MongoDB to Atlas.
-- The app stores PDF URLs in MongoDB. On Vercel, these should be Blob URLs, not local file paths.
-- Browser-based crawling may still depend on target site behavior and Vercel function runtime constraints. If the browser path fails, this app falls back to a static HTML scraper automatically.
+- **Static Fallback**: Browser-based scraping (`crawl4ai`) requires Playwright binaries which are too large for standard Vercel functions. The app will automatically fall back to its **Static Scraper** (using BeautifulSoup) in the cloud.
+- **Cold Starts**: The first request after some time might be slow (1-2 seconds) while the Python function wakes up.
+- **Persistent Data**: No local files will persist on Vercel. Ensure `PDF_STORAGE_BACKEND` is **NOT** set to `local` in production.

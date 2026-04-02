@@ -46,6 +46,7 @@ templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 class ScrapeRequest(BaseModel):
     url: str = Field(..., min_length=8)
+    max_pages: int = Field(default=20, ge=1, le=100)
 
 
 class ChatRequest(BaseModel):
@@ -385,7 +386,7 @@ async def get_document(document_id: str) -> dict[str, Any]:
 async def perform_scrape(req: ScrapeRequest) -> dict[str, Any]:
     collection = await get_collection()
     url = req.url.strip()
-    pages = await scrape_website(url, max_pages=SCRAPE_MAX_PAGES)
+    pages = await scrape_website(url, max_pages=req.max_pages)
 
     if not pages:
         raise HTTPException(status_code=400, detail="No content could be scraped from that URL.")
