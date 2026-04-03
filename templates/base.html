@@ -12,13 +12,15 @@
 <body>
     <div class="page-shell">
         <header class="site-header">
-            <a href="/" class="brand">
-                <span class="brand-mark">S</span>
-                <span>
-                    <strong>Scrape Studio</strong>
-                    <small>Web scraping, PDFs, and focused document chat</small>
-                </span>
-            </a>
+            <div class="header-main">
+                <a href="/" class="brand">
+                    <div class="brand-mark">S</div>
+                    <div class="brand-text">
+                        <strong>Scrape Studio</strong>
+                        <small>Web scraping & AI document chat</small>
+                    </div>
+                </a>
+            </div>
 
             <nav class="site-nav">
                 <a href="/" class="{% if request.url.path == '/' %}active{% endif %}">Dashboard</a>
