@@ -15,6 +15,7 @@ if sys.platform == "win32":
 from bson import ObjectId
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -55,8 +56,22 @@ except (ValueError, TypeError):
     SCRAPE_MAX_PAGES = 20
 
 app = FastAPI(title="Scrape Studio")
+
+# Add CORS Middleware for browser security (Brave/Chrome)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+
+@app.get("/ping")
+async def ping():
+    return {"status": "ok", "message": "Scrape Studio is alive!"}
 
 
 @app.exception_handler(Exception)
@@ -335,23 +350,26 @@ async def initialize_mongo_state() -> None:
 
 
 async def get_collection() -> Any:
-    if not MONGODB_URI:
-         raise HTTPException(status_code=500, detail="Database configuration is missing. Set MONGODB_URI in Vercel Environment Variables.")
-
-    try:
-        if getattr(app.state, "mongo_client", None) is None:
-            print("DEBUG: Client not found, re-initializing...")
-            await initialize_mongo_state()
+    # If client is missing, start initialization but return None or raise error gracefully
+    if getattr(app.state, "mongo_client", None) is None:
+        # Don't await here in the main path if we can help it, 
+        # but for the first request we must have it
+        await initialize_mongo_state()
         
-        # Ping check
-        await app.state.mongo_client.admin.command("ping")
-        return app.state.collection
-    except Exception as exc:
-        print(f"DEBUG: get_collection failed: {exc}")
+    if app.state.mongo_startup_error:
+        # Return a more descriptive error if the DB failed
         raise HTTPException(
-            status_code=503,
-            detail=f"Database connection failed. Ensure: 1. Your MONGODB_URI is correct. 2. You have allowed IP '0.0.0.0/0' in MongoDB Atlas Network Access. 3. Your password is URL-encoded. Error: {exc}",
-        ) from exc
+            status_code=503, 
+            detail=f"Database connection is currently unavailable: {app.state.mongo_startup_error}"
+        )
+    return app.state.collection
+
+
+@app.on_event("startup")
+async def startup_event():
+    # Attempt initialization in the background so we don't block the port bind
+    print("DEBUG: Backgrounding MongoDB initialization...")
+    asyncio.create_task(initialize_mongo_state())
 
 
 async def load_recent_documents(limit: int = 6) -> list[dict[str, Any]]:
