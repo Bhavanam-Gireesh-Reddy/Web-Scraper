@@ -9,3 +9,6 @@ dnspython
 requests
 beautifulsoup4
 reportlab
+crawl4ai
+playwright
+pydantic
