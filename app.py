@@ -294,39 +294,42 @@ async def initialize_mongo_state() -> None:
 
     if getattr(app.state, "mongo_client", None) is None:
         print("DEBUG: Initializing MongoDB client...")
-        
-        # Check if user is using a non-SRV string (standard) as a fallback
-        # Standard strings look like mongodb://user:pass@host:port/
-        is_srv = MONGODB_URI.startswith("mongodb+srv://")
-        
-        app.state.mongo_client = AsyncIOMotorClient(
-            MONGODB_URI, 
-            serverSelectionTimeoutMS=5000,
-            connectTimeoutMS=5000,
-            # Common fix for DNS issues in some serverless environments
-            tlsAllowInvalidCertificates=True 
-        )
-        app.state.database = app.state.mongo_client[MONGODB_DB]
-        app.state.collection = app.state.database[MONGODB_COLLECTION]
-        app.state.mongo_startup_error = ""
+        try:
+            app.state.mongo_client = AsyncIOMotorClient(
+                MONGODB_URI, 
+                serverSelectionTimeoutMS=10000,
+                connectTimeoutMS=10000,
+                tlsAllowInvalidCertificates=True,
+                # Add explicit appName for Atlas tracking
+                appName="ScrapeStudioRender"
+            )
+            app.state.database = app.state.mongo_client[MONGODB_DB]
+            app.state.collection = app.state.database[MONGODB_COLLECTION]
+            app.state.mongo_startup_error = ""
+        except Exception as exc:
+            print(f"DEBUG: MongoDB Client creation error: {exc}")
+            app.state.mongo_startup_error = f"Client Error: {exc}"
+            return
 
     try:
         # Fast ping to verify connection
         print("DEBUG: Pinging MongoDB...")
         await app.state.mongo_client.admin.command("ping")
         print("DEBUG: MongoDB Atlas ping successful.")
+        # Ensure indexes exist
         await app.state.collection.create_index("created_at")
         await app.state.collection.create_index("url")
+        app.state.mongo_startup_error = ""
     except Exception as exc:
         print(f"DEBUG: MongoDB connection failed: {exc}")
         
         friendly_error = str(exc)
         if "Authentication failed" in friendly_error:
-            friendly_error = "MongoDB Auth Failed: Check your username and password (and ensure password is URL-encoded)."
+            friendly_error = "MongoDB Auth Failed: Check your username and password (ensure password is URL-encoded)."
         elif "ServerSelectionTimeoutError" in friendly_error:
-            friendly_error = "MongoDB Timeout: Could not connect to Atlas. Is your IP (0.0.0.0/0) allowed in Atlas Network Access?"
-        elif "srv" in friendly_error.lower():
-            friendly_error = "MongoDB DNS Error: SRV lookup failed. Try using the 'Standard' connection string format instead of 'mongodb+srv://'."
+            friendly_error = "MongoDB Timeout: Could not connect to Atlas. Is your IP (0.0.0.0/0) allowed?"
+        elif "srv" in friendly_error.lower() or "dns" in friendly_error.lower():
+            friendly_error = "MongoDB DNS Error: Try using the 'Standard' connection string instead of 'mongodb+srv://'."
             
         app.state.mongo_startup_error = friendly_error
 
