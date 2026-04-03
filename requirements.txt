@@ -12,3 +12,5 @@ reportlab
 crawl4ai
 playwright
 pydantic
+gunicorn
+uvicorn
