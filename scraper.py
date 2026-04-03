@@ -357,23 +357,15 @@ async def scrape_website(url: str, max_pages: int = DEFAULT_MAX_PAGES, max_depth
         print(f"\nPages scraped: {len(pages)}")
         print(f"Characters captured: {sum(len(page['content']) for page in pages):,}\n")
         return pages
-    except NotImplementedError as exc:
-        print(f"Browser crawler is unavailable on this Windows event loop: {exc}")
-        return await scrape_website_fallback(
-            url,
-            max_pages,
-            max_depth,
-            "Browser crawler is unavailable. Switching to static HTML fallback.",
-        )
-    except Exception as exc:
+    except (ImportError, Exception) as exc:
         message = str(exc).lower()
-        if "playwright" in message or "subprocess" in message or "browser" in message:
-            print(f"Browser crawler failed with a Playwright/browser error: {exc}")
+        if "crawl4ai" in message or "playwright" in message or "module" in message:
+            print(f"Browser scraper is unavailable or failed: {exc}")
             return await scrape_website_fallback(
                 url,
                 max_pages,
                 max_depth,
-                "Browser crawler failed. Switching to static HTML fallback.",
+                "Browser scraper unavailable. Switching to reliable static fallback.",
             )
         raise
 
