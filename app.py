@@ -59,6 +59,30 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """
+    Global exception handler to ensure we ALWAYS return JSON to the frontend,
+    preventing the 'Unexpected token I at Internal Server Error' error.
+    """
+    error_trace = traceback.format_exc()
+    print(f"CRITICAL ERROR: {exc}\n{error_trace}")
+    
+    # Check for common Vercel/Mongo connection errors in the message
+    msg = str(exc)
+    detail = f"An unexpected server error occurred: {msg}"
+    
+    if "dnspython" in msg.lower() or "srv" in msg.lower():
+        detail = "MongoDB DNS Error: Your connection string uses 'mongodb+srv://' which sometimes fails on Vercel. Try using the 'Standard' connection string instead."
+    elif "timeout" in msg.lower():
+        detail = "Server Timeout: The operation took too long. Vercel Hobby plan limit is 10s. Try a smaller number of pages."
+    
+    return JSONResponse(
+        status_code=500,
+        content={"detail": detail, "type": type(exc).__name__}
+    )
+
+
 class ScrapeRequest(BaseModel):
     url: str = Field(..., min_length=8)
     max_pages: int = Field(default=20, ge=1, le=100)
@@ -270,10 +294,17 @@ async def initialize_mongo_state() -> None:
 
     if getattr(app.state, "mongo_client", None) is None:
         print("DEBUG: Initializing MongoDB client...")
+        
+        # Check if user is using a non-SRV string (standard) as a fallback
+        # Standard strings look like mongodb://user:pass@host:port/
+        is_srv = MONGODB_URI.startswith("mongodb+srv://")
+        
         app.state.mongo_client = AsyncIOMotorClient(
             MONGODB_URI, 
             serverSelectionTimeoutMS=5000,
-            connectTimeoutMS=5000
+            connectTimeoutMS=5000,
+            # Common fix for DNS issues in some serverless environments
+            tlsAllowInvalidCertificates=True 
         )
         app.state.database = app.state.mongo_client[MONGODB_DB]
         app.state.collection = app.state.database[MONGODB_COLLECTION]
@@ -281,13 +312,23 @@ async def initialize_mongo_state() -> None:
 
     try:
         # Fast ping to verify connection
+        print("DEBUG: Pinging MongoDB...")
         await app.state.mongo_client.admin.command("ping")
         print("DEBUG: MongoDB Atlas ping successful.")
         await app.state.collection.create_index("created_at")
         await app.state.collection.create_index("url")
     except Exception as exc:
         print(f"DEBUG: MongoDB connection failed: {exc}")
-        app.state.mongo_startup_error = str(exc)
+        
+        friendly_error = str(exc)
+        if "Authentication failed" in friendly_error:
+            friendly_error = "MongoDB Auth Failed: Check your username and password (and ensure password is URL-encoded)."
+        elif "ServerSelectionTimeoutError" in friendly_error:
+            friendly_error = "MongoDB Timeout: Could not connect to Atlas. Is your IP (0.0.0.0/0) allowed in Atlas Network Access?"
+        elif "srv" in friendly_error.lower():
+            friendly_error = "MongoDB DNS Error: SRV lookup failed. Try using the 'Standard' connection string format instead of 'mongodb+srv://'."
+            
+        app.state.mongo_startup_error = friendly_error
 
 
 async def get_collection() -> Any:

@@ -43,7 +43,15 @@ async function handleScrapeSubmit(event) {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ url, max_pages })
         });
-        const data = await response.json();
+        
+        let data;
+        const contentType = response.headers.get("content-type");
+        if (contentType && contentType.includes("application/json")) {
+            data = await response.json();
+        } else {
+            const textErrorMessage = await response.text();
+            throw new Error(textErrorMessage || `Server error (${response.status})`);
+        }
 
         if (!response.ok) {
             throw new Error(data.detail || "The scrape request failed.");

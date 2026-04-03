@@ -219,7 +219,7 @@ def should_follow_link(candidate_url: str, root_netloc: str) -> bool:
     return True
 
 
-def scrape_website_fallback(
+async def scrape_website_fallback(
     url: str,
     max_pages: int = DEFAULT_MAX_PAGES,
     max_depth: int = DEFAULT_MAX_DEPTH,
@@ -238,52 +238,65 @@ def scrape_website_fallback(
     saved_urls: set[str] = set()
     pages: list[dict[str, str]] = []
 
-    while queue and len(pages) < max_pages:
-        current_url, depth = queue.popleft()
-        normalized = current_url.rstrip("/")
-        if normalized in visited or depth > max_depth:
-            continue
-
-        visited.add(normalized)
+    async def fetch_page(current_url: str, depth: int) -> tuple[str, str, int, list[str]]:
         try:
-            response = session.get(current_url, timeout=20)
+            # use to_thread for synchronous requests call
+            response = await asyncio.to_thread(session.get, current_url, timeout=12)
             response.raise_for_status()
-        except requests.exceptions.SSLError:
-            try:
-                response = session.get(current_url, timeout=20, verify=False)
-                response.raise_for_status()
-            except Exception as exc:
-                print(f"  Skipped {current_url[:100]} because of request error: {exc}")
-                continue
         except Exception as exc:
-            print(f"  Skipped {current_url[:100]} because of request error: {exc}")
-            continue
+            print(f"  Skipped {current_url[:60]}...: {exc}")
+            return "", "", depth, []
 
         content_type = response.headers.get("content-type", "").lower()
         if "text/html" not in content_type:
-            continue
+            return "", "", depth, []
 
-        response_normalized = response.url.rstrip("/")
-        if response_normalized in saved_urls:
-            continue
-
+        response_url = response.url.rstrip("/")
         cleaned = html_to_markdown_like_text(response.text, current_url)
-        if cleaned.strip():
-            saved_urls.add(response_normalized)
-            pages.append({"url": response.url, "content": cleaned})
-            print(f"  Saved page: {response.url[:100]}")
+        
+        links = []
+        if depth < max_depth:
+            soup = BeautifulSoup(response.text, "html.parser")
+            for anchor in soup.find_all("a", href=True):
+                next_url, _ = urllib.parse.urldefrag(urllib.parse.urljoin(response.url, anchor["href"]))
+                if should_follow_link(next_url, root_netloc):
+                    links.append(next_url)
+        
+        return response_url, cleaned, depth, links
 
-        if depth >= max_depth:
+    while queue and len(pages) < max_pages:
+        # process in batches of 5 to avoid overwhelming or timing out
+        batch_size = min(5, max_pages - len(pages), len(queue))
+        batch_tasks = []
+        
+        for _ in range(batch_size):
+            if not queue: break
+            curr_url, curr_depth = queue.popleft()
+            norm = curr_url.rstrip("/")
+            if norm in visited: continue
+            visited.add(norm)
+            batch_tasks.append(fetch_page(curr_url, curr_depth))
+            
+        if not batch_tasks:
             continue
-
-        soup = BeautifulSoup(response.text, "html.parser")
-        for anchor in soup.find_all("a", href=True):
-            next_url, _ = urllib.parse.urldefrag(urllib.parse.urljoin(response.url, anchor["href"]))
-            if not should_follow_link(next_url, root_netloc):
+            
+        results = await asyncio.gather(*batch_tasks)
+        
+        for resp_url, content, depth, links in results:
+            if not resp_url or not content.strip():
                 continue
-            if next_url.rstrip("/") in visited:
-                continue
-            queue.append((next_url, depth + 1))
+            
+            if resp_url not in saved_urls:
+                saved_urls.add(resp_url)
+                pages.append({"url": resp_url, "content": content})
+                print(f"  Saved page: {resp_url[:100]}")
+                
+                if len(pages) >= max_pages:
+                    break
+            
+            for link in links:
+                if link.rstrip("/") not in visited:
+                    queue.append((link, depth + 1))
 
     print(f"\nPages scraped: {len(pages)}")
     print(f"Characters captured: {sum(len(page['content']) for page in pages):,}\n")
@@ -299,8 +312,7 @@ async def scrape_website(url: str, max_pages: int = DEFAULT_MAX_PAGES, max_depth
     # Local-first stable mode: avoid the Windows Playwright loop issue unless
     # browser crawling is explicitly requested.
     if scraper_mode == "static" or (sys.platform == "win32" and scraper_mode != "browser"):
-        return await asyncio.to_thread(
-            scrape_website_fallback,
+        return await scrape_website_fallback(
             url,
             max_pages,
             max_depth,
@@ -347,8 +359,7 @@ async def scrape_website(url: str, max_pages: int = DEFAULT_MAX_PAGES, max_depth
         return pages
     except NotImplementedError as exc:
         print(f"Browser crawler is unavailable on this Windows event loop: {exc}")
-        return await asyncio.to_thread(
-            scrape_website_fallback,
+        return await scrape_website_fallback(
             url,
             max_pages,
             max_depth,
@@ -358,8 +369,7 @@ async def scrape_website(url: str, max_pages: int = DEFAULT_MAX_PAGES, max_depth
         message = str(exc).lower()
         if "playwright" in message or "subprocess" in message or "browser" in message:
             print(f"Browser crawler failed with a Playwright/browser error: {exc}")
-            return await asyncio.to_thread(
-                scrape_website_fallback,
+            return await scrape_website_fallback(
                 url,
                 max_pages,
                 max_depth,
